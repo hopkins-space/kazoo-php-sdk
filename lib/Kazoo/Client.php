@@ -3,13 +3,19 @@
 namespace Kazoo;
 
 use stdClass;
-use Kazoo\Exception\InvalidArgumentException;
-use Kazoo\Exception\AuthenticationException;
-use Kazoo\HttpClient\HttpClient;
-use Kazoo\HttpClient\HttpClientInterface;
-use Kazoo\HttpClient\Message\ResponseMediator;
 use Monolog\Logger;
+use RuntimeException;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\HandlerStack;
+use Kazoo\HttpClient\HttpClient;
 use Monolog\Handler\StreamHandler;
+use GuzzleHttp\Handler\CurlHandler;
+use Kazoo\Exception\ErrorException;
+use Psr\Http\Message\RequestInterface;
+use Kazoo\HttpClient\HttpClientInterface;
+use Kazoo\Exception\AuthenticationException;
+use Kazoo\Exception\InvalidArgumentException;
+use Kazoo\HttpClient\Message\ResponseMediator;
 
 /**
  * PHP Kazoo SDK
@@ -117,7 +123,8 @@ class Client {
      * @param null|array $options
      * @param null|\Kazoo\HttpClient\HttpClientInterface $httpClient
      */
-    public function __construct(AuthToken\AuthTokenInterface $authToken, $options = null, HttpClientInterface $httpClient = null) {
+    public function __construct(AuthToken\AuthTokenInterface $authToken, $options = null, HttpClientInterface $httpClient = null)
+    {
         $this->httpClient = $httpClient;
 
         if (is_null($this->options['schema_dir'])) {
@@ -143,6 +150,10 @@ class Client {
                 $this->logger->pushHandler(new StreamHandler('php://stdout', Logger::CRITICAL));
         }
 
+        $stack = new HandlerStack();
+        $stack->setHandler(new CurlHandler());
+        $stack->push($this->addAuthHeaderMiddleware());
+        $this->options['handler'] = $stack;
         $this->options['base_url'] = $this->options['base_url'] . "/v{api_version}";
 
         $this->addUriTokenValue('api_version', $this->getOption('api_version'));
@@ -156,6 +167,28 @@ class Client {
 
         $this->accounts = new \Kazoo\Api\Resource\Accounts($this, "/accounts/{account_id}");
         $this->phone_numbers = new \Kazoo\Api\Resource\GlobalPhoneNumbers($this, "/phone_numbers");
+    }
+
+    /**
+     *
+     */
+    public function addAuthHeaderMiddleware()
+    {
+        return function (callable $handler) {
+            return function (
+                RequestInterface $request,
+                array $options
+            ) use ($handler) {
+                if ($this->getAuthToken()->isDisabled()) {
+                    return $handler($request, $options);
+                }
+
+                $token = $this->authToken->getToken();
+                $request = $request->withHeader('X-Auth-Token', $token);
+
+                return $handler($request, $options);
+            };
+        };
     }
 
     public function getAuthToken() {
@@ -300,7 +333,7 @@ class Client {
      * @param string $path              Request path.
      * @param array $parameters         GET parameters.
      * @param array $requestHeaders     Request Headers.
-     * @return \Guzzle\Http\EntityBodyInterface|mixed|string
+     * @return \Psr\Http\Message\StreamInterface|mixed|string
      */
     public function get($path, array $parameters = array(), $requestHeaders = array()) {
         if (null !== $this->perPage && !isset($parameters['per_page'])) {
@@ -323,6 +356,7 @@ class Client {
     private function executeGet($tokenizedUri, $parameters, $requestHeaders) {
         try {
             $response = $this->getHttpClient()->get($tokenizedUri, $parameters, $requestHeaders);
+
             return ResponseMediator::getContent($response);
         } catch (ErrorException $e) {
             $this->getLogger()->addCritical($e->getMessage());
@@ -359,7 +393,7 @@ class Client {
      * @param string $path              Request path.
      * @param $body                     Request body.
      * @param array $requestHeaders     Request headers.
-     * @return \Guzzle\Http\EntityBodyInterface|mixed|string
+     * @return \Psr\Http\Message\StreamInterface|mixed|string
      */
     public function postRaw($path, $body, $requestHeaders = array()) {
         $tokenizedUri = $this->getTokenizedUri($path);
