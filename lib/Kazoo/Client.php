@@ -32,7 +32,7 @@ class Client {
         'user_agent' => 'kazoo-php-sdk (http://github.com/2600hz/kazoo-php-sdk)',
         'timeout' => 10,
         'api_limit' => 5000,
-        'api_version' => '1',
+        'api_version' => '2',
         'log_type' => null,
         'log_file' => null,
         'cache_dir' => null,
